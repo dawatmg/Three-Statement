@@ -1,0 +1,32 @@
+# Python byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Generated Excel output files
+*.xlsx
+output/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS metadata
+.DS_Store
+
+# Environment variable files
+.env
+*.env.local
