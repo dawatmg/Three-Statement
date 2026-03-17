@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from pathlib import Path
@@ -8,14 +9,14 @@ import requests
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.worksheet.worksheet import Worksheet
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_not_exception_type
 
 
 BASE_URL = "https://financialmodelingprep.com/stable"
-API_KEY = "QXYMQR8PKhe0CtSUlNERXsZd255vgL0g".strip()
+API_KEY = os.environ.get("FMP_API_KEY", "QXYMQR8PKhe0CtSUlNERXsZd255vgL0g").strip()
 
 if not API_KEY:
-    raise RuntimeError("Missing FMP API key.")
+    raise RuntimeError("Missing FMP API key. Set the FMP_API_KEY environment variable.")
 
 SESSION = requests.Session()
 SESSION.headers.update(
@@ -30,10 +31,19 @@ class FMPError(Exception):
     pass
 
 
+class FatalFMPError(FMPError):
+    """Non-retryable error: invalid ticker, bad API key, or truly empty dataset."""
+    pass
+
+
 @retry(
     stop=stop_after_attempt(4),
     wait=wait_exponential(multiplier=1, min=1, max=8),
-    retry=retry_if_exception_type((requests.RequestException, FMPError)),
+    retry=(
+        retry_if_exception_type(requests.RequestException)
+        | (retry_if_exception_type(FMPError) & retry_if_not_exception_type(FatalFMPError))
+    ),
+    reraise=True,
 )
 def fetch(endpoint: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
     query = dict(params)
@@ -45,24 +55,27 @@ def fetch(endpoint: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
     if response.status_code == 429:
         raise FMPError("Rate limited by FMP (429). Try again later.")
 
+    if response.status_code in (401, 403):
+        raise FatalFMPError(f"Authentication failed (HTTP {response.status_code}). Check your API key.")
+
     try:
         response.raise_for_status()
-    except requests.HTTPError as e:
-        raise FMPError(f"HTTP {response.status_code}: {response.text}")
-    
+    except requests.HTTPError:
+        raise FatalFMPError(f"HTTP {response.status_code}: {response.text}")
+
     data = response.json()
 
     if isinstance(data, dict):
         if data.get("Error Message"):
-            raise FMPError(data["Error Message"])
+            raise FatalFMPError(data["Error Message"])
         if data.get("error"):
-            raise FMPError(str(data["error"]))
+            raise FatalFMPError(str(data["error"]))
 
     if not isinstance(data, list):
-        raise FMPError(f"Unexpected response type from {endpoint}: {type(data).__name__}")
+        raise FatalFMPError(f"Unexpected response type from {endpoint}: {type(data).__name__}")
 
     if len(data) == 0:
-        raise FMPError(f"No data returned from {endpoint}")
+        raise FatalFMPError(f"No data returned from {endpoint}. Check the ticker symbol.")
 
     return data
 
@@ -351,7 +364,7 @@ def build_balance_sheet_sheet(ws: Worksheet, ticker: str, data_list: List[Dict[s
     
     ws[f'A{row}'] = "  Accounts Receivable"
     for idx, data_rec in enumerate(data_list):
-        ws.cell(row=row, column=idx+2).value = data_rec.get("accountsReceivable", 0)
+        ws.cell(row=row, column=idx+2).value = data_rec.get("netReceivables", data_rec.get("accountsReceivables", 0))
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 1
     
@@ -397,7 +410,7 @@ def build_balance_sheet_sheet(ws: Worksheet, ticker: str, data_list: List[Dict[s
     
     ws[f'A{row}'] = "  Accounts Payable"
     for idx, data_rec in enumerate(data_list):
-        ws.cell(row=row, column=idx+2).value = data_rec.get("accountsPayable", 0)
+        ws.cell(row=row, column=idx+2).value = data_rec.get("accountPayables", data_rec.get("accountsPayable", 0))
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 1
     
@@ -531,7 +544,7 @@ def build_cash_flow_sheet(ws: Worksheet, ticker: str, data_list: List[Dict[str, 
     
     ws[f'A{row}'] = "  Acquisitions"
     for idx, data_rec in enumerate(data_list):
-        ws.cell(row=row, column=idx+2).value = data_rec.get("acquisitions", 0)
+        ws.cell(row=row, column=idx+2).value = data_rec.get("acquisitionsNet", data_rec.get("acquisitions", 0))
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 2
     
@@ -539,7 +552,11 @@ def build_cash_flow_sheet(ws: Worksheet, ticker: str, data_list: List[Dict[str, 
     style_subtotal_row(ws, row, len(dates) + 1)
     ws[f'A{row}'].font = Font(bold=True)
     for idx, data_rec in enumerate(data_list):
-        investing = (data_rec.get("capitalExpenditure", 0) * -1) + data_rec.get("acquisitions", 0)
+        # Use the actual reported FMP field (note: FMP API has a typo in "activites")
+        investing = data_rec.get(
+            "netCashUsedForInvestingActivites",
+            data_rec.get("netCashUsedForInvestingActivities", 0)
+        )
         ws.cell(row=row, column=idx+2).value = investing
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 2
@@ -549,15 +566,15 @@ def build_cash_flow_sheet(ws: Worksheet, ticker: str, data_list: List[Dict[str, 
     style_section_row(ws, row, len(dates) + 1)
     row += 1
     
-    ws[f'A{row}'] = "  Debt Issued"
+    ws[f'A{row}'] = "  Debt Repayment"
     for idx, data_rec in enumerate(data_list):
-        ws.cell(row=row, column=idx+2).value = data_rec.get("debtIssued", 0)
+        ws.cell(row=row, column=idx+2).value = data_rec.get("debtRepayment", 0)
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 1
     
-    ws[f'A{row}'] = "  Debt Repaid"
+    ws[f'A{row}'] = "  Stock Repurchased"
     for idx, data_rec in enumerate(data_list):
-        ws.cell(row=row, column=idx+2).value = data_rec.get("debtRepaid", 0)
+        ws.cell(row=row, column=idx+2).value = data_rec.get("commonStockRepurchased", 0)
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 1
     
@@ -571,7 +588,7 @@ def build_cash_flow_sheet(ws: Worksheet, ticker: str, data_list: List[Dict[str, 
     style_subtotal_row(ws, row, len(dates) + 1)
     ws[f'A{row}'].font = Font(bold=True)
     for idx, data_rec in enumerate(data_list):
-        financing = data_rec.get("debtIssued", 0) - data_rec.get("debtRepaid", 0) - data_rec.get("dividendsPaid", 0)
+        financing = data_rec.get("netCashUsedProvidedByFinancingActivities", 0)
         ws.cell(row=row, column=idx+2).value = financing
         ws.cell(row=row, column=idx+2).number_format = '#,##0'
     row += 2
@@ -648,9 +665,14 @@ def main() -> None:
         elapsed = time.time() - start
         print(f"Saved workbook: {out.resolve()}")
         print(f"Done in {elapsed:.2f}s")
+    except FatalFMPError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
     except Exception as e:
-        if hasattr(e, 'last_attempt'):
-            print(f"ERROR: {e.last_attempt.exception()}")
+        cause = getattr(e, 'last_attempt', None)
+        if cause is not None:
+            inner = cause.exception()
+            print(f"ERROR after retries: {inner}")
         else:
             print(f"ERROR: {e}")
         sys.exit(1)

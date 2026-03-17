@@ -1,18 +1,24 @@
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_not_exception_type
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
-API_KEY = "QXYMQR8PKhe0CtSUlNERXsZd255vgL0g"
+API_KEY = os.environ.get("FMP_API_KEY", "QXYMQR8PKhe0CtSUlNERXsZd255vgL0g").strip()
 BASE_URL = "https://financialmodelingprep.com/stable"
 
 
 class FMPError(Exception):
+    pass
+
+
+class FatalFMPError(FMPError):
+    """Non-retryable error: invalid ticker, bad API key, or truly empty dataset."""
     pass
 
 
@@ -89,7 +95,11 @@ THIN = Side(style="thin", color="D9D9D9")
 @retry(
     stop=stop_after_attempt(4),
     wait=wait_exponential(multiplier=1, min=1, max=8),
-    retry=retry_if_exception_type((requests.RequestException, FMPError)),
+    retry=(
+        retry_if_exception_type(requests.RequestException)
+        | (retry_if_exception_type(FMPError) & retry_if_not_exception_type(FatalFMPError))
+    ),
+    reraise=True,
 )
 def fetch(endpoint: str, ticker: str, period: str, limit: int) -> pd.DataFrame:
     url = f"{BASE_URL}/{endpoint}"
@@ -104,21 +114,24 @@ def fetch(endpoint: str, ticker: str, period: str, limit: int) -> pd.DataFrame:
     if r.status_code == 429:
         raise FMPError("Rate limited by FMP (429).")
 
+    if r.status_code in (401, 403):
+        raise FatalFMPError(f"Authentication failed (HTTP {r.status_code}). Check your API key.")
+
     r.raise_for_status()
     data = r.json()
 
     if isinstance(data, dict):
         if data.get("Error Message"):
-            raise FMPError(data["Error Message"])
+            raise FatalFMPError(data["Error Message"])
         if data.get("error"):
-            raise FMPError(str(data["error"]))
+            raise FatalFMPError(str(data["error"]))
 
     if not isinstance(data, list) or len(data) == 0:
-        raise FMPError(f"No data returned for {endpoint} / {ticker} / {period}")
+        raise FatalFMPError(f"No data returned for {endpoint} / {ticker} / {period}. Check the ticker symbol.")
 
     df = pd.DataFrame(data)
     if "date" not in df.columns:
-        raise FMPError(f"Missing date column in {endpoint}")
+        raise FatalFMPError(f"Missing date column in {endpoint}")
     df = df.sort_values("date", ascending=False).reset_index(drop=True)
     return df
 
@@ -503,12 +516,24 @@ def export_model(ticker: str) -> Path:
 
 
 def main():
-    if not API_KEY or API_KEY == "PASTE_YOUR_NEW_FMP_KEY_HERE":
-        raise RuntimeError("Add your new FMP API key to the API_KEY line first.")
+    if not API_KEY:
+        raise RuntimeError("Missing FMP API key. Set the FMP_API_KEY environment variable.")
 
     ticker = sys.argv[1].strip() if len(sys.argv) > 1 else input("Enter ticker: ").strip()
-    output = export_model(ticker)
-    print(f"Saved: {output.resolve()}")
+    try:
+        output = export_model(ticker)
+        print(f"Saved: {output.resolve()}")
+    except FatalFMPError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+    except Exception as e:
+        cause = getattr(e, 'last_attempt', None)
+        if cause is not None:
+            inner = cause.exception()
+            print(f"ERROR after retries: {inner}")
+        else:
+            print(f"ERROR: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
