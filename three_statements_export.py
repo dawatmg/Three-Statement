@@ -38,10 +38,7 @@ from config import (
     RETRY_WAIT_MIN,
 )
 from utils import (
-    freeze_header,
-    set_column_widths,
-    write_data_row,
-    write_header_row,
+    SheetWriter,
 )
 
 logging.basicConfig(
@@ -149,10 +146,6 @@ def _fetch_statement(
 # Sheet builders
 # ---------------------------------------------------------------------------
 
-def _period_headers(records: list[dict]) -> list[str]:
-    """Extract period labels (date strings) from a list of statement records."""
-    return [r.get("date", f"Period {i + 1}") for i, r in enumerate(records)]
-
 
 def build_income_statement_sheet(ws, records: list[dict], period_label: str) -> None:
     """Populate a worksheet with an income statement."""
@@ -160,47 +153,34 @@ def build_income_statement_sheet(ws, records: list[dict], period_label: str) -> 
         ws.cell(row=1, column=1, value="No data available.")
         return
 
-    headers = ["Income Statement"] + _period_headers(records)
-    write_header_row(ws, headers)
-    freeze_header(ws)
-    set_column_widths(ws, len(records))
+    sw = SheetWriter(ws, "Income Statement", records)
 
-    def _vals(key: str) -> list:
-        return [r.get(key) for r in records]
+    sw.section("Revenue")
+    sw.normal("Revenue", "revenue")
+    sw.normal("Cost of Revenue", "costOfRevenue")
+    sw.subtotal("Gross Profit", "grossProfit")
 
-    row = 2
+    sw.section("Operating Expenses")
+    sw.normal("Research & Development", "researchAndDevelopmentExpenses")
+    sw.normal("Selling, General & Admin", "sellingGeneralAndAdministrativeExpenses")
+    sw.normal("Operating Expenses (Total)", "operatingExpenses")
+    sw.subtotal("Operating Income (EBIT)", "operatingIncome")
 
-    # Revenue section
-    write_data_row(ws, row, "Revenue", [], style="section"); row += 1
-    write_data_row(ws, row, "Revenue", _vals("revenue")); row += 1
-    write_data_row(ws, row, "Cost of Revenue", _vals("costOfRevenue")); row += 1
-    write_data_row(ws, row, "Gross Profit", _vals("grossProfit"), style="subtotal"); row += 1
+    sw.section("Other Income / Expenses")
+    sw.normal("Interest Expense", "interestExpense")
+    sw.normal("Total Other Income", "totalOtherIncomeExpensesNet")
+    sw.subtotal("EBITDA", "ebitda")
 
-    # Operating expenses
-    write_data_row(ws, row, "Operating Expenses", [], style="section"); row += 1
-    write_data_row(ws, row, "Research & Development", _vals("researchAndDevelopmentExpenses")); row += 1
-    write_data_row(ws, row, "Selling, General & Admin", _vals("sellingGeneralAndAdministrativeExpenses")); row += 1
-    write_data_row(ws, row, "Operating Expenses (Total)", _vals("operatingExpenses")); row += 1
-    write_data_row(ws, row, "Operating Income (EBIT)", _vals("operatingIncome"), style="subtotal"); row += 1
+    sw.section("Pre-tax Income")
+    sw.normal("Income Before Tax", "incomeBeforeTax")
+    sw.normal("Income Tax Expense", "incomeTaxExpense")
+    sw.subtotal("Net Income", "netIncome")
 
-    # Below-the-line items
-    write_data_row(ws, row, "Other Income / Expenses", [], style="section"); row += 1
-    write_data_row(ws, row, "Interest Expense", _vals("interestExpense")); row += 1
-    write_data_row(ws, row, "Total Other Income", _vals("totalOtherIncomeExpensesNet")); row += 1
-    write_data_row(ws, row, "EBITDA", _vals("ebitda"), style="subtotal"); row += 1
-
-    # Net income
-    write_data_row(ws, row, "Pre-tax Income", [], style="section"); row += 1
-    write_data_row(ws, row, "Income Before Tax", _vals("incomeBeforeTax")); row += 1
-    write_data_row(ws, row, "Income Tax Expense", _vals("incomeTaxExpense")); row += 1
-    write_data_row(ws, row, "Net Income", _vals("netIncome"), style="subtotal"); row += 1
-
-    # Per-share data
-    write_data_row(ws, row, "Per Share Data", [], style="section"); row += 1
-    write_data_row(ws, row, "EPS (Basic)", _vals("eps")); row += 1
-    write_data_row(ws, row, "EPS (Diluted)", _vals("epsdiluted")); row += 1
-    write_data_row(ws, row, "Shares Outstanding (Basic)", _vals("weightedAverageShsOut")); row += 1
-    write_data_row(ws, row, "Shares Outstanding (Diluted)", _vals("weightedAverageShsOutDil")); row += 1
+    sw.section("Per Share Data")
+    sw.normal("EPS (Basic)", "eps")
+    sw.normal("EPS (Diluted)", "epsdiluted")
+    sw.normal("Shares Outstanding (Basic)", "weightedAverageShsOut")
+    sw.normal("Shares Outstanding (Diluted)", "weightedAverageShsOutDil")
 
     ws.title = f"{period_label} Income Statement"
 
@@ -211,59 +191,46 @@ def build_balance_sheet_sheet(ws, records: list[dict], period_label: str) -> Non
         ws.cell(row=1, column=1, value="No data available.")
         return
 
-    headers = ["Balance Sheet"] + _period_headers(records)
-    write_header_row(ws, headers)
-    freeze_header(ws)
-    set_column_widths(ws, len(records))
+    sw = SheetWriter(ws, "Balance Sheet", records)
 
-    def _vals(key: str) -> list:
-        return [r.get(key) for r in records]
+    sw.section("Current Assets")
+    sw.normal("Cash & Equivalents", "cashAndCashEquivalents")
+    sw.normal("Short-term Investments", "shortTermInvestments")
+    sw.normal("Net Receivables", "netReceivables")
+    sw.normal("Inventory", "inventory")
+    sw.normal("Other Current Assets", "otherCurrentAssets")
+    sw.subtotal("Total Current Assets", "totalCurrentAssets")
 
-    row = 2
+    sw.section("Non-Current Assets")
+    sw.normal("Property, Plant & Equipment (net)", "propertyPlantEquipmentNet")
+    sw.normal("Goodwill", "goodwill")
+    sw.normal("Intangible Assets", "intangibleAssets")
+    sw.normal("Long-term Investments", "longTermInvestments")
+    sw.normal("Other Non-Current Assets", "otherNonCurrentAssets")
+    sw.subtotal("Total Non-Current Assets", "totalNonCurrentAssets")
+    sw.subtotal("Total Assets", "totalAssets")
 
-    # Current assets
-    write_data_row(ws, row, "Current Assets", [], style="section"); row += 1
-    write_data_row(ws, row, "Cash & Equivalents", _vals("cashAndCashEquivalents")); row += 1
-    write_data_row(ws, row, "Short-term Investments", _vals("shortTermInvestments")); row += 1
-    write_data_row(ws, row, "Net Receivables", _vals("netReceivables")); row += 1
-    write_data_row(ws, row, "Inventory", _vals("inventory")); row += 1
-    write_data_row(ws, row, "Other Current Assets", _vals("otherCurrentAssets")); row += 1
-    write_data_row(ws, row, "Total Current Assets", _vals("totalCurrentAssets"), style="subtotal"); row += 1
+    sw.section("Current Liabilities")
+    sw.normal("Accounts Payable", "accountPayables")
+    sw.normal("Short-term Debt", "shortTermDebt")
+    sw.normal("Tax Payable", "taxPayables")
+    sw.normal("Deferred Revenue", "deferredRevenue")
+    sw.normal("Other Current Liabilities", "otherCurrentLiabilities")
+    sw.subtotal("Total Current Liabilities", "totalCurrentLiabilities")
 
-    # Non-current assets
-    write_data_row(ws, row, "Non-Current Assets", [], style="section"); row += 1
-    write_data_row(ws, row, "Property, Plant & Equipment (net)", _vals("propertyPlantEquipmentNet")); row += 1
-    write_data_row(ws, row, "Goodwill", _vals("goodwill")); row += 1
-    write_data_row(ws, row, "Intangible Assets", _vals("intangibleAssets")); row += 1
-    write_data_row(ws, row, "Long-term Investments", _vals("longTermInvestments")); row += 1
-    write_data_row(ws, row, "Other Non-Current Assets", _vals("otherNonCurrentAssets")); row += 1
-    write_data_row(ws, row, "Total Non-Current Assets", _vals("totalNonCurrentAssets"), style="subtotal"); row += 1
-    write_data_row(ws, row, "Total Assets", _vals("totalAssets"), style="subtotal"); row += 1
+    sw.section("Non-Current Liabilities")
+    sw.normal("Long-term Debt", "longTermDebt")
+    sw.normal("Deferred Tax Liabilities", "deferredTaxLiabilitiesNonCurrent")
+    sw.normal("Other Non-Current Liabilities", "otherNonCurrentLiabilities")
+    sw.subtotal("Total Non-Current Liabilities", "totalNonCurrentLiabilities")
+    sw.subtotal("Total Liabilities", "totalLiabilities")
 
-    # Current liabilities
-    write_data_row(ws, row, "Current Liabilities", [], style="section"); row += 1
-    write_data_row(ws, row, "Accounts Payable", _vals("accountPayables")); row += 1
-    write_data_row(ws, row, "Short-term Debt", _vals("shortTermDebt")); row += 1
-    write_data_row(ws, row, "Tax Payable", _vals("taxPayables")); row += 1
-    write_data_row(ws, row, "Deferred Revenue", _vals("deferredRevenue")); row += 1
-    write_data_row(ws, row, "Other Current Liabilities", _vals("otherCurrentLiabilities")); row += 1
-    write_data_row(ws, row, "Total Current Liabilities", _vals("totalCurrentLiabilities"), style="subtotal"); row += 1
-
-    # Non-current liabilities
-    write_data_row(ws, row, "Non-Current Liabilities", [], style="section"); row += 1
-    write_data_row(ws, row, "Long-term Debt", _vals("longTermDebt")); row += 1
-    write_data_row(ws, row, "Deferred Tax Liabilities", _vals("deferredTaxLiabilitiesNonCurrent")); row += 1
-    write_data_row(ws, row, "Other Non-Current Liabilities", _vals("otherNonCurrentLiabilities")); row += 1
-    write_data_row(ws, row, "Total Non-Current Liabilities", _vals("totalNonCurrentLiabilities"), style="subtotal"); row += 1
-    write_data_row(ws, row, "Total Liabilities", _vals("totalLiabilities"), style="subtotal"); row += 1
-
-    # Equity
-    write_data_row(ws, row, "Shareholders' Equity", [], style="section"); row += 1
-    write_data_row(ws, row, "Common Stock", _vals("commonStock")); row += 1
-    write_data_row(ws, row, "Retained Earnings", _vals("retainedEarnings")); row += 1
-    write_data_row(ws, row, "Other Equity", _vals("othertotalStockholdersEquity")); row += 1
-    write_data_row(ws, row, "Total Shareholders' Equity", _vals("totalStockholdersEquity"), style="subtotal"); row += 1
-    write_data_row(ws, row, "Total Liabilities & Equity", _vals("totalLiabilitiesAndStockholdersEquity"), style="subtotal"); row += 1
+    sw.section("Shareholders' Equity")
+    sw.normal("Common Stock", "commonStock")
+    sw.normal("Retained Earnings", "retainedEarnings")
+    sw.normal("Other Equity", "othertotalStockholdersEquity")
+    sw.subtotal("Total Shareholders' Equity", "totalStockholdersEquity")
+    sw.subtotal("Total Liabilities & Equity", "totalLiabilitiesAndStockholdersEquity")
 
     ws.title = f"{period_label} Balance Sheet"
 
@@ -274,52 +241,40 @@ def build_cash_flow_sheet(ws, records: list[dict], period_label: str) -> None:
         ws.cell(row=1, column=1, value="No data available.")
         return
 
-    headers = ["Cash Flow Statement"] + _period_headers(records)
-    write_header_row(ws, headers)
-    freeze_header(ws)
-    set_column_widths(ws, len(records))
+    sw = SheetWriter(ws, "Cash Flow Statement", records)
 
-    def _vals(key: str) -> list:
-        return [r.get(key) for r in records]
+    sw.section("Operating Activities")
+    sw.normal("Net Income", "netIncome")
+    sw.normal("Depreciation & Amortisation", "depreciationAndAmortization")
+    sw.normal("Stock-based Compensation", "stockBasedCompensation")
+    sw.normal("Changes in Working Capital", "changeInWorkingCapital")
+    sw.normal("Accounts Receivable Change", "accountsReceivables")
+    sw.normal("Inventory Change", "inventory")
+    sw.normal("Accounts Payable Change", "accountsPayables")
+    sw.normal("Other Operating Activities", "otherWorkingCapital")
+    sw.subtotal("Cash from Operations", "netCashProvidedByOperatingActivities")
 
-    row = 2
+    sw.section("Investing Activities")
+    sw.normal("Capital Expenditures", "capitalExpenditure")
+    sw.normal("Acquisitions", "acquisitionsNet")
+    sw.normal("Purchases of Investments", "purchasesOfInvestments")
+    sw.normal("Sales of Investments", "salesMaturitiesOfInvestments")
+    sw.normal("Other Investing Activities", "otherInvestingActivites")
+    sw.subtotal("Cash from Investing", "netCashUsedForInvestingActivites")
 
-    # Operating activities
-    write_data_row(ws, row, "Operating Activities", [], style="section"); row += 1
-    write_data_row(ws, row, "Net Income", _vals("netIncome")); row += 1
-    write_data_row(ws, row, "Depreciation & Amortisation", _vals("depreciationAndAmortization")); row += 1
-    write_data_row(ws, row, "Stock-based Compensation", _vals("stockBasedCompensation")); row += 1
-    write_data_row(ws, row, "Changes in Working Capital", _vals("changeInWorkingCapital")); row += 1
-    write_data_row(ws, row, "Accounts Receivable Change", _vals("accountsReceivables")); row += 1
-    write_data_row(ws, row, "Inventory Change", _vals("inventory")); row += 1
-    write_data_row(ws, row, "Accounts Payable Change", _vals("accountsPayables")); row += 1
-    write_data_row(ws, row, "Other Operating Activities", _vals("otherWorkingCapital")); row += 1
-    write_data_row(ws, row, "Cash from Operations", _vals("netCashProvidedByOperatingActivities"), style="subtotal"); row += 1
+    sw.section("Financing Activities")
+    sw.normal("Debt Repayment", "debtRepayment")
+    sw.normal("Common Stock Issuance", "commonStockIssued")
+    sw.normal("Common Stock Repurchased", "commonStockRepurchased")
+    sw.normal("Dividends Paid", "dividendsPaid")
+    sw.normal("Other Financing Activities", "otherFinancingActivites")
+    sw.subtotal("Cash from Financing", "netCashUsedProvidedByFinancingActivities")
 
-    # Investing activities
-    write_data_row(ws, row, "Investing Activities", [], style="section"); row += 1
-    write_data_row(ws, row, "Capital Expenditures", _vals("capitalExpenditure")); row += 1
-    write_data_row(ws, row, "Acquisitions", _vals("acquisitionsNet")); row += 1
-    write_data_row(ws, row, "Purchases of Investments", _vals("purchasesOfInvestments")); row += 1
-    write_data_row(ws, row, "Sales of Investments", _vals("salesMaturitiesOfInvestments")); row += 1
-    write_data_row(ws, row, "Other Investing Activities", _vals("otherInvestingActivites")); row += 1
-    write_data_row(ws, row, "Cash from Investing", _vals("netCashUsedForInvestingActivites"), style="subtotal"); row += 1
-
-    # Financing activities
-    write_data_row(ws, row, "Financing Activities", [], style="section"); row += 1
-    write_data_row(ws, row, "Debt Repayment", _vals("debtRepayment")); row += 1
-    write_data_row(ws, row, "Common Stock Issuance", _vals("commonStockIssued")); row += 1
-    write_data_row(ws, row, "Common Stock Repurchased", _vals("commonStockRepurchased")); row += 1
-    write_data_row(ws, row, "Dividends Paid", _vals("dividendsPaid")); row += 1
-    write_data_row(ws, row, "Other Financing Activities", _vals("otherFinancingActivites")); row += 1
-    write_data_row(ws, row, "Cash from Financing", _vals("netCashUsedProvidedByFinancingActivities"), style="subtotal"); row += 1
-
-    # Summary
-    write_data_row(ws, row, "Summary", [], style="section"); row += 1
-    write_data_row(ws, row, "Net Change in Cash", _vals("netChangeInCash"), style="subtotal"); row += 1
-    write_data_row(ws, row, "Cash at Beginning of Period", _vals("cashAtBeginningOfPeriod")); row += 1
-    write_data_row(ws, row, "Cash at End of Period", _vals("cashAtEndOfPeriod"), style="subtotal"); row += 1
-    write_data_row(ws, row, "Free Cash Flow", _vals("freeCashFlow"), style="subtotal"); row += 1
+    sw.section("Summary")
+    sw.subtotal("Net Change in Cash", "netChangeInCash")
+    sw.normal("Cash at Beginning of Period", "cashAtBeginningOfPeriod")
+    sw.subtotal("Cash at End of Period", "cashAtEndOfPeriod")
+    sw.subtotal("Free Cash Flow", "freeCashFlow")
 
     ws.title = f"{period_label} Cash Flow"
 

@@ -8,7 +8,6 @@ from openpyxl.styles import (
     Alignment,
     Border,
     Side,
-    numbers,
 )
 from openpyxl.utils import get_column_letter
 
@@ -137,3 +136,67 @@ def write_data_row(
             apply_number_style(cell, row_idx)
         else:
             apply_number_style(cell, row_idx)
+
+
+# ---------------------------------------------------------------------------
+# SheetWriter — consistent, stateful API for building statement sheets
+# ---------------------------------------------------------------------------
+
+class SheetWriter:
+    """
+    Wraps a worksheet and provides a consistent, stateful API for writing
+    financial statement rows.
+
+    The row counter is managed automatically so callers never need to track
+    or increment it manually.  All three builder functions use this class,
+    keeping them consistent and easy to extend.
+
+    Usage
+    -----
+    ::
+
+        sw = SheetWriter(ws, "Income Statement", records)
+        sw.section("Revenue")
+        sw.normal("Revenue", "revenue")
+        sw.normal("Cost of Revenue", "costOfRevenue")
+        sw.subtotal("Gross Profit", "grossProfit")
+    """
+
+    def __init__(self, ws, title: str, records: list[dict]) -> None:
+        self._ws = ws
+        self._records = records
+        self._row = 2  # row 1 is reserved for the header
+
+        period_headers = [
+            r.get("date", f"Period {i + 1}") for i, r in enumerate(records)
+        ]
+        write_header_row(ws, [title] + period_headers)
+        freeze_header(ws)
+        set_column_widths(ws, len(records))
+
+    # ------------------------------------------------------------------
+    # Public row-writing methods
+    # ------------------------------------------------------------------
+
+    def section(self, label: str) -> None:
+        """Write a section-header row (coloured label, no numeric data)."""
+        write_data_row(self._ws, self._row, label, [], style="section")
+        self._row += 1
+
+    def normal(self, label: str, key: str) -> None:
+        """Write a normal detail row, pulling values from ``key``."""
+        write_data_row(self._ws, self._row, label, self._vals(key))
+        self._row += 1
+
+    def subtotal(self, label: str, key: str) -> None:
+        """Write a subtotal row (bold, top border) pulling values from ``key``."""
+        write_data_row(self._ws, self._row, label, self._vals(key), style="subtotal")
+        self._row += 1
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _vals(self, key: str) -> list:
+        """Return the value of *key* for every period in order."""
+        return [r.get(key) for r in self._records]
